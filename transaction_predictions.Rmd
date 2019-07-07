@@ -1,0 +1,210 @@
+---
+title: "Customer transaction prediction"
+author: "Ozan Aygun"
+date: "July 6, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This is an older Kaggle challenge (https://www.kaggle.com/c/santander-customer-transaction-prediction/data) I will explore here. 
+
+```{r}
+require(caret)
+require(dplyr)
+require(ggplot2)
+```
+
+Preliminary data exploration:
+
+```{r}
+train_set <- read.csv("train.csv")
+```
+
+```{r}
+dim(train_set)
+```
+
+```{r}
+data_types <- NULL
+for (i in 1:ncol(train_set)){
+    data_types <- c(data_types,typeof(train_set[,i]))
+}
+
+table(data_types)
+```
+
+It looks like the encoding of the data is numeric. However, the first column is factor:
+
+```{r}
+str(train_set[,1:10])
+```
+
+##Processing step 1: 
+
+The first column is an index variable, we need to drop that column:
+
+```{r}
+train_set <- train_set %>% select(-ID_code)
+```
+
+How about missing values?
+
+```{r}
+any_missing <- apply(is.na(train_set),2,sum)
+sum(any_missing)
+```
+
+It looks like the data set is complete.
+
+How about distribution of features?
+
+```{r, fig.align='center', fig.height=10,fig.width=20}
+par(mfrow = c(10,20), mar = c(3,1,1,1))
+
+for(i in 2:201){
+    hist(train_set[,i],breaks = 50,col = "navy", border ='navy', main = colnames(train_set[i]))
+}
+```
+
+Most of the variables look near normal, there are a few that have some skewing. We don't have any information regarding what these variables are. So at this point let's standardize them and see their distribution.
+
+
+```{r, fig.align='center', fig.height=10,fig.width=20}
+par(mfrow = c(10,20), mar = c(3,1,1,1))
+
+for(i in 2:201){
+    hist(scale(train_set[,i]),breaks = 50,col = "navy", border ='navy', main = colnames(train_set[i]))
+}
+```
+
+## Processing Step 2: Feature standardization
+
+```{r}
+std_features <- as.data.frame(scale(train_set[,2:201]))
+train_set <- cbind(train_set[,1],std_features)
+```
+
+```{r}
+colnames(train_set)[1] <- "target"
+```
+
+```{r}
+train_set$target <- factor(train_set$target, levels = c(0,1), labels = c('class0','class1'))
+```
+
+
+Each of these features have near equal variance, but is it possible that classes are seperated better in a space that is formed by a selection of them?
+
+```{r}
+# For example
+plot(train_set$var_13,train_set$var_58, 
+     col = alpha(ifelse(train_set$target == 1,"red","lightblue"),0.4), 
+     cex = ifelse(train_set$target == 1,1,0.1),pch = 19)
+
+# For example
+plot(train_set$var_73,train_set$var_145, 
+     col = alpha(ifelse(train_set$target == 1,"red","lightblue"),0.4), 
+     cex = ifelse(train_set$target == 1,1,0.1),pch = 19)
+```
+
+
+It looks like some clusters are possible, but it is hard to see any linear relationship based on the handful examples I tried. A decision-tree based model could be helpful to explore if there are certain feature interactions that can provide some good classification. 
+
+# Modeling efforts
+
+```{r}
+# Serialize and save training set for easier loading
+saveRDS(train_set,'train_set.rds')
+```
+
+
+## generalized linear model (logistic regression)
+
+```{r}
+library(caret)
+library(doParallel)
+train_set <- readRDS('train_set.rds')
+```
+
+
+Let's get started using a generalized linear model (logistic regression). 
+Initially no fearure selection, in order to identify a benchmark model:
+
+```{r}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+set.seed(871)
+clf_rf <- train(target ~ . , method = "glm", data = train_set, 
+                metric = "ROC", 
+                trControl = trainControl(allowParallel = TRUE, 
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+```{r}
+clf_rf
+```
+
+So our benchmark logistic regression model gives a cross-validated ROC estimate of 0.859. Good sensitivity, but specificity is poor.
+
+## Random Forest classifier
+
+
+```{r}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+set.seed(871)
+clf_rf <- train(target ~ . , method = "rf", data = train_set, 
+                metric = "ROC", 
+                trControl = trainControl(allowParallel = TRUE, 
+                                         method="oob", classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+RF model turned out to be extremely inefficient for the sake of this problem. I am skipping it at this point.
+
+## Elastic Net
+
+Let's try regularized logistic regression using L1 and L2 penalties:
+
+```{r}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+
+# performing a grid-search for optimal tuning parameters
+
+# alpha (Mixing Percentage)
+# lambda (Regularization Parameter/ Penalty strength)
+
+# Note the use of expand.grid function
+
+# Create a data frame from all combinations of the supplied vectors or factors.
+
+
+glmnet_grid = expand.grid(alpha = c(0,0.1,0.5,1),
+                          lambda = c(0.01,1,10,100))
+
+set.seed(871)
+clf_glmnet <- train(target ~ . , method = "glmnet", data = train_set, 
+                metric = "ROC", tuneGrid = glmnet_grid, 
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+```{r}
+print(clf_glmnet)
+```
+
