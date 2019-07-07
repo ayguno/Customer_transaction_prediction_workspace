@@ -115,9 +115,20 @@ plot(train_set$var_73,train_set$var_145,
 
 It looks like some clusters are possible, but it is hard to see any linear relationship based on the handful examples I tried. A decision-tree based model could be helpful to explore if there are certain feature interactions that can provide some good classification. 
 
-# Modeling efforts
+
+## Checking for multicollinearity
 
 ```{r}
+library(corrplot)
+cormatrix <- cor(train_set[,-1])
+corrplot(cormatrix, method = "square",tl.cex = 0.1)
+```
+
+It looks like features are pretty muc uncorrelated with each other.
+
+# Modeling efforts
+
+```{r,eval = FALSE}
 # Serialize and save training set for easier loading
 saveRDS(train_set,'train_set.rds')
 ```
@@ -135,7 +146,7 @@ train_set <- readRDS('train_set.rds')
 Let's get started using a generalized linear model (logistic regression). 
 Initially no fearure selection, in order to identify a benchmark model:
 
-```{r}
+```{r,eval = FALSE}
 start_time <- Sys.time()
 cl <- makeCluster(7)
 registerDoParallel(cl)
@@ -158,7 +169,7 @@ So our benchmark logistic regression model gives a cross-validated ROC estimate 
 ## Random Forest classifier
 
 
-```{r}
+```{r,eval = FALSE}
 start_time <- Sys.time()
 cl <- makeCluster(7)
 registerDoParallel(cl)
@@ -177,7 +188,7 @@ RF model turned out to be extremely inefficient for the sake of this problem. I 
 
 Let's try regularized logistic regression using L1 and L2 penalties:
 
-```{r}
+```{r,eval = FALSE}
 start_time <- Sys.time()
 cl <- makeCluster(7)
 registerDoParallel(cl)
@@ -207,4 +218,183 @@ Sys.time() - start_time
 ```{r}
 print(clf_glmnet)
 ```
+
+The benchmark remains the same, suggesting that we need to try diferent types of models other than linear.
+
+Here is a new question, it sounds like alpha = 0 is effectively giving better results, which is equivalent of Ridge penalty. Can we try tuning lambda in a finer space while keeping alpha = 0?
+
+
+```{r,eval = FALSE}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+
+# performing a grid-search for optimal tuning parameters
+
+# alpha (Mixing Percentage)
+# lambda (Regularization Parameter/ Penalty strength)
+
+# Note the use of expand.grid function
+
+# Create a data frame from all combinations of the supplied vectors or factors.
+
+
+glmnet_grid = expand.grid(alpha = 0,
+                          lambda = c(seq(0.001,0.01,0.001),
+                                     seq(0.02,0.1,0.01),
+                                     seq(0.2,1,0.1)))
+
+set.seed(871)
+clf_glmnet2 <- train(target ~ . , method = "glmnet", data = train_set, 
+                metric = "ROC", tuneGrid = glmnet_grid, 
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+```{r}
+print(clf_glmnet2)
+```
+
+Note that specificity increases as we reduce lambda, suggesting that reducing penalty strength to a finer grid may potentially improve performance. Let's try searching even a smaller lambda space:
+
+```{r,eval = FALSE}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+
+# performing a grid-search for optimal tuning parameters
+
+# alpha (Mixing Percentage)
+# lambda (Regularization Parameter/ Penalty strength)
+
+# Note the use of expand.grid function
+
+# Create a data frame from all combinations of the supplied vectors or factors.
+
+
+glmnet_grid = expand.grid(alpha = 0,
+                          lambda = seq(0.00001,0.001,length.out = 20))
+
+set.seed(871)
+clf_glmnet3 <- train(target ~ . , method = "glmnet", data = train_set, 
+                metric = "ROC", tuneGrid = glmnet_grid, 
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+```{r}
+print(clf_glmnet3)
+```
+
+Using a lambda of 0.001 effectively gives the same result. We have a little uplift for specificity compared to earlier models. 
+
+```{r}
+plot(clf_glmnet)
+plot(clf_glmnet2)
+plot(clf_glmnet3)
+```
+
+Save our glmnet3 model (Ridge) and continue exploring other model options:
+
+```{r}
+saveRDS(clf_glmnet3,"clf_glmnet3.rds")
+```
+
+
+Available models along with caret parameters:
+
+```{r}
+# Useful reference from caret package
+# For understanding tuning parameters for unfamiliar methods, we need to refer original package vignettes
+models <- modelLookup()
+head(models)
+tail(models)
+```
+
+
+
+## Support Vector Machine Classifier with a Radial Kernel
+
+```{r}
+start_time <- Sys.time()
+cl <- makeCluster(7)
+registerDoParallel(cl)
+
+# performing a grid-search for optimal tuning parameters
+
+
+# Note the use of expand.grid function
+
+# Create a data frame from all combinations of the supplied vectors or factors.
+
+
+svmRadial_grid = expand.grid(sigma = seq(0.00001,100,length.out = 20),
+                          C = seq(0.00001,100,length.out = 20))
+
+set.seed(871)
+clf_svmRadial <- train(target ~ . , method = "svmRadial", data = train_set, 
+                metric = "ROC", tuneGrid = svmRadial_grid, 
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+
+Training SVM model turned out to be extremely inefficient for the sake of this problem. I am skipping it at this point since R suffered memory problems using this amount of training data.
+
+
+
+## Extreme Gradient Boosted Trees
+
+```{r,eval=FALSE}
+
+start_time <- Sys.time()
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+
+
+set.seed(871)
+clf_xgbDART <- train(target ~ . , method = "xgbDART", data = train_set, 
+                metric = "ROC",  
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+After 3 hours, even with parallelization, model continues to train. I concluded that this is not a practical option, either.
+
+
+## Naive Bayes classifier after PCA
+
+```{r,eval=FALSE}
+
+start_time <- Sys.time()
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+set.seed(871)
+clf_NB <- train(target ~ . , method = "naive_bayes", data = train_set, 
+                metric = "ROC", preProcess = 'pca',  
+                trControl = trainControl(allowParallel = TRUE,
+                                         summaryFunction = twoClassSummary,
+                                         method="cv", number=5, classProbs=TRUE))
+stopCluster(cl)
+Sys.time() - start_time
+```
+
+
+
+
+
 
